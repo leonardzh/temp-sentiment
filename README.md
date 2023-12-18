@@ -8,3 +8,5 @@ off-record cleaning is needed is tweets are not completed.
 `split_tweets.py` would split the large json to 1-2GB pieces to leverage the multiple processing of converting json to CSV.
 
 ## Convert tweets in json to CSV
+
+`Convert_Tweets_CSV.py` extract geolocation and convert json to data tables in CSV.
