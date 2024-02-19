@@ -1,40 +1,37 @@
-from __future__ import division
-import numpy as np
-import requests, uuid
+"""
+This script assigns sentiment scores to tweets.
+
+Each tweet is assigned a set of sentiment scores based on its content, including afinn, hedonometer, and vader scores.
+The sentiment scores indicate the sentiment polarity of the tweet, such as positive, negative, or neutral.
+
+Author: Zheng Liu
+Date: 2024-01-29
+"""
+import warnings
+warnings.filterwarnings("ignore")
+
+import pandas as pd
+import csv
+import glob
+
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+import nltk
+import emoji
+import preprocessor as p
+import re
+import math
 import os
 import json
 import pandas as pd
-from textblob import TextBlob
-import re
-import math
-import vaderSentiment
-from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-import nltk
-from nltk.stem import WordNetLemmatizer
-from nltk.corpus import wordnet as wn
-from nltk.corpus import sentiwordnet as swn
-from nltk import sent_tokenize, word_tokenize, pos_tag
-import preprocessor as p
-import emoji
-import glob
-import seaborn as sns
-import csv
-from multiprocessing import Process
-from tqdm import tqdm
-from pathlib import Path
-#DEFINE GLOBAL VARIABLES
-os.chdir('/home/liuz/gpdata/sesync')
-
-#Paths
-READ_PATH = 'data/tweets/tweets/'
-SAVE_PATH = 'data/tweets/sentiment/'
-
-AFINN_PATH = 'codes/temp-sentiment/sentiment/AFINN-111.txt'
-HEDONO_PATH = "codes/temp-sentiment/sentiment/Data_Set_S1.txt"
-#WKWSCI_PATH = 'sentiment_lexicon/WKWSCISenti.tab'
-
+from multiprocessing import Pool,Process
+nltk.download('punkt')
+p.set_options(p.OPT.URL, p.OPT.EMOJI)
 TEXT_FIELD = 'pure_text'
-
+PROJECT_ROOT = '/gpfs/data1/oshangp/liuz/sesync'
+READ_PATH = PROJECT_ROOT+'/data/tweets/csv'
+SAVE_PATH = PROJECT_ROOT+'/data/processed/sen'
+AFINN_PATH = PROJECT_ROOT+'/codes/temp-sentiment/sentiment/AFINN-111.txt'
+HEDONO_PATH = PROJECT_ROOT+'/codes/temp-sentiment/sentiment/Data_Set_S1.txt'
 str_weather_terms = '''aerovane air airstream altocumulus altostratus anemometer anemometers anticyclone anticyclones \
 arctic arid aridity atmosphere atmospheric autumn autumnal balmy baroclinic barometer barometers \
 barometric blizzard blizzards blustering blustery blustery breeze breezes breezy brisk calm \
@@ -67,9 +64,6 @@ windy winter wintery wintry'''
 LST_WEATHER_TERMS = str_weather_terms.split(' ')
 DICT_WEATHER_TERMS = {LST_WEATHER_TERMS[i]: 1 for i in range(len(LST_WEATHER_TERMS))}
 
-###########################
-# Utility Functions
-##########################
 def CheckWeatherTerm(text):
     '''
     Return 1 or 0 for whether input contains any weather term
@@ -80,161 +74,37 @@ def CheckWeatherTerm(text):
             return 1
     return 0
 
-#unit test
-#CheckWeatherTerm('A good weather!')
+# def keepemoji_clean(text):
+#     '''
+#     clean text with tweet-preprocessor
+#     '''
+#     text = emoji.demojize(text)
+#     return p.clean(text)
+#https://github.com/s/preprocessor/issues/50
+class TimeoutException(Exception):
+    pass
+
+def timeout_handler(signum, frame):
+    raise TimeoutException
 
 def keepemoji_clean(text):
     '''
     clean text with tweet-preprocessor
     '''
     text = emoji.demojize(text)
-    return p.clean(text)
+    import signal
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(2)
+    try:
+        r = p.clean(text)
+    except TimeoutException:
+        print(f"Could not handle the {text}")
+        r = text
+    else:
+        signal.alarm(0)
 
-###########################
-# Sentiment Score Metrics
-##########################
+    return r
 
-################### WKWSCI sentiment ###############################
-
-# lemmatizer = WordNetLemmatizer()
-# def loadWkwsciDict():
-#     df = pd.read_csv(WKWSCI_PATH, sep='\t')
-#     wkwsci_dict = df.set_index(['term','POS'])['sentiment'].to_dict()
-#     return wkwsci_dict
-
-# wkwsci_dict = loadWkwsciDict()
-
-# def penn_to_wn(tag):
-#     """
-#     Convert between the PennTreebank tags to simple Wordnet tags
-#     """
-#     if tag.startswith('J'):
-#         return wn.ADJ
-#     elif tag.startswith('N'):
-#         return wn.NOUN
-#     elif tag.startswith('R'):
-#         return wn.ADV
-#     elif tag.startswith('V'):
-#         return wn.VERB
-#     return None
-
-# def WKWSCI_term_sentiment(wkwsci_dict,word,tag):
-#     if tag == wn.ADJ:
-#         pos = 'adj'
-#     elif tag == wn.NOUN:
-#         pos = 'n'
-#     elif tag == wn.VERB:
-#         pos = 'v'
-#     elif tag == wn.ADV:
-#         pos = 'adv'
-#     if (word,pos) in wkwsci_dict:
-#         return wkwsci_dict[(word,pos)]
-#     else:
-#         return 0
-    
-
-# def WKWSCI_polarity(text,wkwsci_dict):
-#     """
-#     Return a sentiment polarity
-#     """
-#     sentiment = 0.0
-#     tokens_count = 0
-#     #text = clean_text(text)
-#     raw_sentences = sent_tokenize(text)
-#     for raw_sentence in raw_sentences:
-#         tagged_sentence = pos_tag(word_tokenize(raw_sentence))
-#         for word, tag in tagged_sentence:
-#             wn_tag = penn_to_wn(tag)
-#             if wn_tag not in (wn.NOUN, wn.ADJ, wn.ADV):
-#                 continue
-#             lemma = lemmatizer.lemmatize(word, pos=wn_tag)
-#             if not lemma:
-#                 continue
-#             synsets = wn.synsets(lemma, pos=wn_tag)
-#             if not synsets:
-#                 continue
-#             synset = synsets[0]
-#             senti_word = synset.name().split('.')[0]
-#             sentiment_score = WKWSCI_term_sentiment(wkwsci_dict,senti_word,wn_tag)
-#             sentiment += sentiment_score
-#             tokens_count += 1
-#     # judgment call ? Default to positive or negative
-#     if not tokens_count:
-#         return 0
-#     # sum greater than 0 => positive sentiment
-#     return 1.0*sentiment/tokens_count
-
-# #unittest
-# #WKWSCI_polarity('It is sad',wkwsci_dict)
-
-# def add_wkwsci(df):
-#     wkwsci_dict = loadWkwsciDict()
-#     df['wkwsci'] = df[TEXT_FIELD].progress_map(lambda x:WKWSCI_polarity(x,wkwsci_dict))
-#     return df
-
-
-################### SentiWordNet ###############################
-
-# lemmatizer = WordNetLemmatizer()
-# def penn_to_wn(tag):
-#     """
-#     Convert between the PennTreebank tags to simple Wordnet tags
-#     """
-#     if tag.startswith('J'):
-#         return wn.ADJ
-#     elif tag.startswith('N'):
-#         return wn.NOUN
-#     elif tag.startswith('R'):
-#         return wn.ADV
-#     elif tag.startswith('V'):
-#         return wn.VERB
-#     return None
-
-# def swn_polarity(text):
-#     """
-#     Return a sentiment polarity: 0 = negative, 1 = positive
-#     """
-#     sentiment = 0.0
-#     tokens_count = 0
-#     raw_sentences = sent_tokenize(text)
-#     for raw_sentence in raw_sentences:
-#         tagged_sentence = pos_tag(word_tokenize(raw_sentence))
-#         for word, tag in tagged_sentence:
-#             wn_tag = penn_to_wn(tag)
-#             if wn_tag not in (wn.NOUN, wn.ADJ, wn.ADV):
-#                 continue
-#             lemma = lemmatizer.lemmatize(word, pos=wn_tag)
-#             #print('lemma: '+lemma)
-#             if not lemma:
-#                 continue
-#             synsets = wn.synsets(lemma, pos=wn_tag)
-#             #print('synsets: '+str(synsets))
-#             if not synsets:
-#                 continue
-#             # Take the first sense, the most common
-#             synset = synsets[0]
-#             swn_synset = swn.senti_synset(synset.name())
-#             sentiment += swn_synset.pos_score() - swn_synset.neg_score()
-#             tokens_count += 1
-#     # judgment call ? Default to positive or negative
-#     if not tokens_count:
-#         return 0
-#     # sum greater than 0 => positive sentiment
-#     return sentiment
-# #unit test
-# #swn_polarity('Nice job!') # 1 1
-
-# def add_swn(df):
-#     df['swn'] = df[TEXT_FIELD].progress_map(lambda x:swn_polarity(x))
-#     return df
-
-################### Texeblob ###############################
-
-def add_textblob(df):
-   df['textblob'] = df[TEXT_FIELD].progress_map(lambda x:TextBlob(x).sentiment.polarity)
-   return df
-
-################### AFINN ###############################
 def afinn_sentiment(text,afinn,pattern_split):
     """
     Returns a float for sentiment strength based on the input text.
@@ -256,11 +126,8 @@ def add_afinn(df):
     afinn = dict(map(lambda ws: (ws[0], int(ws[1])), [ 
             ws.strip().split('\t') for ws in open(filenameAFINN) ]))
     pattern_split = re.compile(r"\W+")
-    df['afinn'] = df[TEXT_FIELD].progress_map(lambda x:afinn_sentiment(x,afinn,pattern_split))
+    df['afinn'] = df[TEXT_FIELD].map(lambda x:afinn_sentiment(x,afinn,pattern_split))
     return df
-
-
-################### Hedonometer ###############################
 
 def load_scores(filename):
     """Takes a file from the Dodd research paper and returns a dict of
@@ -351,6 +218,8 @@ class HMeter(object):
         else:
             pass  # empty lists have no score
 
+
+
 def hmeter_sentiment(text,pattern_split,scores):
     """
     Returns a float for sentiment strength based on the input text.
@@ -360,80 +229,70 @@ def hmeter_sentiment(text,pattern_split,scores):
     h = HMeter(words,scores)
     return h.happiness_score()
 
-# unittest
-# hmeter_sentiment('VADER is not smart, handsome, nor funny')
-
 def add_hedono(df):
     scores = load_scores(HEDONO_PATH)
     pattern_split = re.compile(r"\W+")
-    df['hedono'] = df[TEXT_FIELD].progress_map(lambda x:hmeter_sentiment(x,pattern_split,scores))
+    df['hedono'] = df[TEXT_FIELD].map(lambda x:hmeter_sentiment(x,pattern_split,scores))
     return df
 
-
-################### VADER ###############################
 def add_vader(df):
     analyzer = SentimentIntensityAnalyzer()
-    df['vader'] = df[TEXT_FIELD].progress_map(lambda x:analyzer.polarity_scores(x)['compound'])
+    df['vader'] = df[TEXT_FIELD].map(lambda x:analyzer.polarity_scores(x)['compound'])
     return df
-#unittest
-# vs = analyzer.polarity_scores("VADER is VERY SMART, handsome, and FUNNY.")
-# vs
-
-###################### Combine ################################
-# def add_polarity_weighted(df,weights = 1):
-#     return df
-
 def add_all_sentiment(df):
     '''
     calculate sentiment scores for field TEXT_FIELD
     '''
     df = add_afinn(df)
-    df = add_textblob(df)
     df = add_hedono(df)
     df = add_vader(df)
-    #df = add_swn(df)
-    #df = add_wkwsci(df)
-    #df = add_polarity_weighted(df)
     return df
 
-################################
-# Execute All
-#################################
-
-def process_all_by_file(f):
-    df = pd.read_json(f, orient='records')
-    #Some have no text data, so drop
-    fn = f.split('/')[-1]
-    filename = SAVE_PATH + fn.replace('json', 'csv')
-    if df.size == 0:
-        pd.DataFrame({}).to_csv(filename, index=False)
-        print('empty: {}'.format(f))
-        return -1
-    tqdm.pandas(desc=filename)
+def sentiment(df):
     df = df[df['pure_text'].notna()]
-    df = df[['id','pure_text','tweet_created_at']]
-    df['clean_text'] = df['pure_text'].progress_map(lambda x:keepemoji_clean(x))
-    df['weather_term'] = df['clean_text'].progress_map(lambda x:CheckWeatherTerm(x))
+    df['tweet_created_at_int'] = df['tweet_created_at'].apply(lambda x: json.loads(x.replace("'", '"'))['$date'])
+    df = df[['id','pure_text','tweet_created_at_int','fastText_lang','lat','lon']]
+    df['clean_text'] = df['pure_text'].map(lambda x:keepemoji_clean(x))
+    df['weather_term'] = df['clean_text'].map(lambda x:CheckWeatherTerm(x))
     df = add_all_sentiment(df)
     df = df.drop(columns=['pure_text','clean_text'])
-    print(filename)
-    df.to_csv(filename,index=False)
-    return 0
+    return df
 
-#Get all not-yet-processed tweet data
-tweetfiles = glob.glob(READ_PATH + '*.json')
-donefiles = glob.glob(SAVE_PATH + '*.csv')
-tweetfiles = [tweet for tweet in tweetfiles if 'tweets/sentiment/' + tweet[14:24] + '.csv' not in donefiles]
 
-tweetfiles.sort()
+CPU_NUMBER = 40
 
-processes = []
-for f in tweetfiles:
-    proc = Process(target=process_all_by_file, args=(f, ))
-    processes.append(proc)
-    proc.start()
+def process_file(file):
+    # Read the CSV file
+    try:
+        
+        df = pd.read_csv(file,lineterminator='\n',dtype={'id':str,'tweet_created_at':str})
+        print(file,df.shape)
+        # Apply the sentiment function to the data frame
+        df = sentiment(df)
+        
+        # Save the modified data frame with the same file name in the SAVE_PATH
+        save_file = os.path.join(SAVE_PATH, os.path.basename(file))
+        df.to_csv(save_file, index=False)
+        print(file,'done')
+    except Exception as e:
+        print(file,e)
+if __name__ == '__main__':
+    # Get the list of CSV files in the READ_PATH
+    donefiles = os.listdir(SAVE_PATH)
+    tweetfiles = [os.path.join(READ_PATH, f) for f in os.listdir(READ_PATH) if f.endswith('.csv') and f not in donefiles]
+    print(tweetfiles)
+    # for file in tweetfiles:
+    #     process_file(file)
+    #Create a pool of workers
+    with Pool(CPU_NUMBER) as pool:
+        # Process the files in parallel
+        pool.map(process_file, tweetfiles)
+    processes = []
+    for f in tweetfiles:
+        proc = Process(target=process_file, args=(f, ))
+        processes.append(proc)
+        proc.start()
 
-for process in processes:
-    process.join()
+    for process in processes:
+        process.join()
 
-#os.system('/home/ubuntu/telegram.sh "Done with Sentiment"')

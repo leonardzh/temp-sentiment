@@ -13,7 +13,8 @@ if len(sys.argv) != 2:
 
 # Get the filename from the command-line arguments
 year = sys.argv[1]
-input_file = f'cleaned/usa_tweets_{year}.json'
+# input_file = f'cleaned/usa_tweets_{year}.json'
+input_file = f'usa_tweets_{year}.json'
 
 # Output directory
 output_dir = 'trunk'
@@ -43,7 +44,7 @@ def split_json(input_file):
 
     print("Splitting completed.")
 
-split_json(input_file)
+#split_json(input_file)
 
 
 # input_file = f'usa_tweets_{year}.json'
@@ -66,18 +67,24 @@ def raw_decode(input_file):
     # Initialize variables
     parsed_objects = []
     decoder = json.JSONDecoder()
-    chunk_size = 10
+    chunk_size = 1000000
+    window = 65536
     chunk_count = 0
     # Loop to parse each JSON object
-    while concatenated_json:
+    pos = 0
+    while pos < len(concatenated_json):
         # Use JSONDecoder.raw_decode() to parse the next JSON object
-        obj, end_pos = decoder.raw_decode(concatenated_json)
-        # Add the parsed object to the list
-        parsed_objects.append(obj)
-        
-        # Remove the parsed JSON object from the concatenated string
-        concatenated_json = concatenated_json[end_pos:].lstrip()
-
+        try:
+            obj, end_pos = decoder.raw_decode(concatenated_json[pos:pos+window])
+            # Add the parsed object to the list
+            parsed_objects.append(obj)
+            
+            # Remove the parsed JSON object from the concatenated string
+            pos += end_pos
+        except Exception as e:
+            print(pos,len(concatenated_json))
+            print(concatenated_json[pos:pos+20])
+            break
         if len(parsed_objects) == chunk_size:
             chunk_count += 1
             chunk_filename = os.path.join(output_dir, f'{year}_chunk_{chunk_count}.json')
@@ -97,4 +104,4 @@ def raw_decode(input_file):
         with open(chunk_filename, 'w') as chunk_file:
             json.dump(parsed_objects, chunk_file)
         print('write to',chunk_filename)
-#raw_decode(input_file)
+raw_decode(input_file)
