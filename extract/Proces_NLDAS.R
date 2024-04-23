@@ -5,10 +5,10 @@
 library(data.table)
 library(weathermetrics)
 
-setwd('~/tweets/')
+setwd('/gpfs/data1/oshangp/liuz/sesync')
 
-dt <- fread("nldas2.csv", col.names=c('temp', 'id', 'tweet_created_at', 'speh', 'pres', 
-                                      'prcp', 'srad', 'lrad', 'wndu', 'wndv'))
+dt <- fread("./data/processed/nldas2.csv", col.names=c('id','tweet_created_at_int','temp',
+            'speh', 'pres', 'prcp', 'srad', 'lrad', 'wndu', 'wndv'))
 
 #Somehow, bizarrely, we have a lot of duplicates
 dt <- unique(dt)
@@ -36,7 +36,7 @@ get_rh <- function(speh, temp, pres){
 get_wbgt <- function(temp, rh, srad, ws){
   0.735*temp + 0.0374*rh + 0.00292*temp*rh + 7.619*srad - 4.557*srad^2 - 0.0572*ws -4.064
 }
-
+dt$temp <- dt$temp + 273.15 #convert to Kelvin
 dt$ws <- get_ws(dt$wndu, dt$wndv)
 dt$rh <- mapply(get_rh, speh=dt$speh, temp=dt$temp, pres=dt$pres)
 dt$temp <- dt$temp - 273.15
@@ -44,11 +44,11 @@ dt$wbgt <- mapply(get_wbgt, temp = dt$temp, rh = dt$rh*100,
                     srad = dt$srad/1000, ws = dt$ws)
 dt$temp.hi <- heat.index(dt$temp, rh=dt$rh*100, temperature.metric='celsius')
 
- <- dt[ , c('id', 'tweet_created_at', 'temp', 'prcp', 'srad', 'wbgt', 'temp.hi')]
+dt <- dt[ , c('id', 'tweet_created_at_int', 'temp', 'prcp', 'srad', 'wbgt', 'temp.hi')]
 
-fwrite(dt, 'hourly_nldas2_all.csv')
+fwrite(dt, './data/processed/hourly_nldas2_all.csv')
 
-system('~/telegram.sh "Done with temp processing"')
+# system('~/telegram.sh "Done with temp processing"')
 
 
 
